@@ -1,0 +1,30 @@
+name: Build & Publish RSS Feed
+
+on:
+  push:
+    branches: [ "main" ]
+  schedule:
+    # 08:00 & 18:00 Amsterdam ≈ 06:00 & 16:00 UTC (zomertijd); in wintertijd kun je dit naar 07:00 & 17:00 aanpassen
+    - cron: "0 6,16 * * *"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Generate feed.xml
+        run: |
+          python3 generate_feed.py
+
+      - name: Upload artifact (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: feed
+          path: feed.xml
