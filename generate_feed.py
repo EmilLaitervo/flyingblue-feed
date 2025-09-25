@@ -32,7 +32,7 @@ def make_rss(items):
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
     ET.SubElement(channel, "title").text = "Flying Blue XP Deals (< €10/XP)"
-    ET.SubElement(channel, "link").text = "https://<jouwgebruikersnaam>.github.io/flyingblue-feed/feed.xml"
+    ET.SubElement(channel, "link").text = "https://emillaitervo.github.io/flyingblue-feed/feed.xml"
     ET.SubElement(channel, "description").text = "Automatisch gegenereerde feed met Flying Blue deals onder €10/XP"
     ET.SubElement(channel, "language").text = "nl"
     now = datetime.now(timezone.utc)
