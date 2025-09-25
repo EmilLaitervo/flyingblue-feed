@@ -1,4 +1,6 @@
 title,link,itinerary,cabin,segments,xp_total,price_eur,eur_per_xp,travel_dates,carrier,book_code,notes,pubdate_utc
 RTM-CDG-OSL (Economy),https://example.com/test1,RTM-CDG-OSL,Economy,2,20,150,7.50,2025-10-05 to 2025-10-08,KL,V,GitHub testregel,2025-09-26T10:00:00Z
+AMS-CDG-DUB (Business),https://example.com/test2,AMS-CDG-DUB,Business,2,30,250,8.33,2025-10-15 to 2025-10-17,KL,J,IFTTT testtrigger,2025-09-26T12:00:00Z
+
 
 
