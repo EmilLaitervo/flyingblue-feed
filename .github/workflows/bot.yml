@@ -1,16 +1,25 @@
 name: Flying Blue XP Bot
 
+# <-- Zorg ook dat in GitHub: Settings → Actions → General → 
+#     Workflow permissions = "Read and write permissions"
+
+permissions:
+  contents: write   # nodig om te kunnen pushen
+
 on:
   schedule:
-    - cron: "0 * * * *"   # draait elk uur
-  workflow_dispatch:       # je kunt het ook handmatig starten
+    - cron: "0 * * * *"   # elk uur (UTC)
+  workflow_dispatch:        # handmatig starten kan ook
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repo (met push-token)
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -20,16 +29,23 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run bot
+      - name: Run bot (zoek vluchten & schrijf deals.csv)
         env:
           AMADEUS_API_KEY: ${{ secrets.AMADEUS_API_KEY }}
           AMADEUS_API_SECRET: ${{ secrets.AMADEUS_API_SECRET }}
-        run: python bot.py
+        run: python3 bot.py
 
-      - name: Commit updated feed
+      - name: Rebuild feed.xml
+        run: python3 generate_feed.py
+
+      - name: Commit & push alleen bij wijzigingen
         run: |
           git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
-          git add feed.xml deals.csv
-          git commit -m "Update feed from bot" || echo "No changes to commit"
-          git push
+          git config --local user.name "github-actions"
+          git add deals.csv feed.xml || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "bot: update deals & feed"
+            git push
+          fi
