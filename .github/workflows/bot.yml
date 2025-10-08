@@ -1,25 +1,29 @@
 name: Flying Blue XP Bot
 
-# <-- Zorg ook dat in GitHub: Settings → Actions → General → 
-#     Workflow permissions = "Read and write permissions"
-
 permissions:
-  contents: write   # nodig om te kunnen pushen
+  contents: write
 
 on:
   schedule:
-    - cron: "0 * * * *"   # elk uur (UTC)
-  workflow_dispatch:        # handmatig starten kan ook
+    - cron: "0 * * * *"        # elk uur (UTC)
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo (met push-token)
+      - name: Checkout repo (met push-token, volledige history)
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0           # <- belangrijk: niet shallow clonen
+
+      - name: Sync met remote (rebase op main)
+        run: |
+          git fetch origin
+          git checkout main
+          git pull --rebase origin main || true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run bot (zoek vluchten & schrijf deals.csv)
+      - name: Run bot (schrijft deals.csv)
         env:
           AMADEUS_API_KEY: ${{ secrets.AMADEUS_API_KEY }}
           AMADEUS_API_SECRET: ${{ secrets.AMADEUS_API_SECRET }}
@@ -38,14 +42,20 @@ jobs:
       - name: Rebuild feed.xml
         run: python3 generate_feed.py
 
-      - name: Commit & push alleen bij wijzigingen
+      - name: Commit & push alleen bij wijzigingen (met rebase)
         run: |
           git config --local user.email "actions@github.com"
-          git config --local user.name "github-actions"
+          git config --local user.name  "github-actions"
+
           git add deals.csv feed.xml || true
           if git diff --cached --quiet; then
             echo "No changes to commit"
-          else
-            git commit -m "bot: update deals & feed"
-            git push
+            exit 0
           fi
+
+          # Rebase nogmaals vlak voor push om race conditions te vermijden
+          git pull --rebase origin main || true
+
+          git commit -m "bot: update deals & feed"
+          # veilige force: alleen als remote intussen niet veranderd is
+          git push --force-with-lease
