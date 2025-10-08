@@ -4,7 +4,7 @@ import os, csv, time, random, logging, requests, datetime as dt
 
 # ========= Instellingen =======================================================
 # Vertrekluchthavens (je kunt later alle 9 aanzetten; begin compact voor snelheid)
-ORIGINS = ["AMS","BRU","DUS","CGN","NRN","RTM","EIN","GRQ","MST"]
+ORIGINS = ["AMS"]
 
 # Kansrijke EU-bestemmingen (hubs + goedkope J-runs). Vul gerust aan.
 DESTS = [
@@ -21,14 +21,14 @@ DAYS_AHEAD   = 60              # zoek 60 dagen vooruit
 DAY_STEP     = 2               # dichter raster dan voorheen
 STAY_NIGHTS  = [0,1,2]         # same-day/overnight/2 nachten
 CURRENCY     = "EUR"
-THRESHOLD    = 10.0            # alleen < €10/XP publiceren
+THRESHOLD    = 12.0            # alleen < €10/XP publiceren
 USE_TEST_API = False           # productie!
 
 # Cabin-keuze: nu J-only om kans op < €10/XP te maximaliseren
-CABIN_CLASSES = ["BUSINESS"]
+CABIN_CLASSES = ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"]
 
 # Minimaal aantal segmenten per retour (intra-EU J=15 XP/segment → 4 seg = 60 XP)
-MIN_SEGMENTS = 4
+MIN_SEGMENTS = 2
 
 # Near-miss logging (alleen loggen tussen 10–12 €/XP, niet publiceren)
 NEAR_MISS_LOW, NEAR_MISS_HIGH = 10.0, 12.0
