@@ -1,79 +1,80 @@
 #!/usr/bin/env python3
-import os, csv, requests, datetime as dt
+import os, csv, time, random, logging, requests, datetime as dt
 
-# ------ Instellingen ---------------------------------------------------------
-ORIGINS = ["AMS","DUS"]
-
-# Kansrijke EU-bestemmingen (hubs + goedkope XP-routes); voeg gerust toe
-DESTS = [
-  "CDG","ORY","LYS","NCE","MRS",       # Frankrijk / AF-hubs
-  "OSL","TRF","BGO","SVG","CPH","ARN","GOT","HEL","TLL","RIX",
-  "ATH","SKG","TLV","IST","SAW","LCA","MLA","BCN","MAD","AGP","PMI",
-  "LIS","OPO","FAO","DUB","BFS","EDI","GLA","BHX","MAN","BRS","NCL",
-  "WAW","KRK","GDN","PRG","BUD","ZAG","SPU","DBV","TIA",
-  "VIE","ZRH","GVA","MXP","LIN","FCO","NAP","PSA","FLR","CAG","CTA",
-  "RHO","HER","CFU","SKP","SOF","VAR","BUH","CLJ","IAS",
-  "VNO","KUN","PLQ",
-]
-
-DAYS_AHEAD   = 14                 # zoek 60 dagen vooruit
-STAY_NIGHTS  = [1,2,3]            # 1-3 nachten (pas aan naar smaak)
+# ====== Snellere/robuustere settings =========================================
+ORIGINS = ["AMS","BRU","DUS"]               # begin compact; later uitbreiden
+DESTS   = ["CDG","OSL","CPH","ARN","HEL","BCN","LIS","MAD","DUB","VIE","PRG"]
+DAYS_AHEAD   = 45                            # 60 kan, maar 45 is sneller
+DAY_STEP     = 5                             # i.p.v. elke dag → om de 5 dagen
+STAY_NIGHTS  = [2]                           # eenvoudiger raster; later 1/3 erbij
 CURRENCY     = "EUR"
-THRESHOLD    = 10.0               # alleen < €10/XP
-USE_TEST_API = False              # *** productie aan ***
+THRESHOLD    = 10.0
+USE_TEST_API = False                         # productie!
 
-# SkyTeam operated + FB-marketed (codes die XP posten via Flying Blue)
+# Limieten / anti-hang
+REQUEST_TIMEOUT = 12                         # seconden per API-call
+MAX_RETRIES     = 2                          # retries per call
+BACKOFF_SEC     = 2.5
+MAX_QUERIES     = 120                        # harde cap per run
+EARLY_STOP_AT   = 10                         # stop zodra 10 hits < €10/XP
+DEADLINE_MIN    = 8                          # run hard stoppen < 10 min step
+
+# SkyTeam + FB-marketing
 SKYTEAM      = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
 FB_MARKETING = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
 
-# ------ Helpers --------------------------------------------------------------
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+
 def base_url():
-    return "https://test.api.amadeus.com" if USE_TEST_API else "https://api.amadeus.com"
+    return "https://api.amadeus.com" if not USE_TEST_API else "https://test.api.amadeus.com"
 
 def get_token():
     r = requests.post(
         f"{base_url()}/v1/security/oauth2/token",
-        data={
-          "grant_type":"client_credentials",
-          "client_id":os.getenv("AMADEUS_API_KEY"),
-          "client_secret":os.getenv("AMADEUS_API_SECRET"),
-        },
-        timeout=25
+        data={"grant_type":"client_credentials",
+              "client_id":os.getenv("AMADEUS_API_KEY"),
+              "client_secret":os.getenv("AMADEUS_API_SECRET")},
+        timeout=REQUEST_TIMEOUT
     )
     r.raise_for_status()
     return r.json()["access_token"]
 
+def get_with_retries(url, params, headers):
+    for i in range(MAX_RETRIES + 1):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            if i == MAX_RETRIES: raise
+            sleep = BACKOFF_SEC * (i+1)
+            logging.warning(f"API retry {i+1}/{MAX_RETRIES} in {sleep:.1f}s: {e}")
+            time.sleep(sleep)
+
 def search_offers(tok, origin, dest, dep, ret):
     params = {
-      "originLocationCode": origin,
-      "destinationLocationCode": dest,
-      "departureDate": dep.isoformat(),
-      "returnDate": ret.isoformat(),
-      "adults": 1,
-      "currencyCode": CURRENCY,
-      "max": 50,                 # houd bescheiden; je kan dit later verhogen
+        "originLocationCode": origin,
+        "destinationLocationCode": dest,
+        "departureDate": dep.isoformat(),
+        "returnDate": ret.isoformat(),
+        "adults": 1,
+        "currencyCode": CURRENCY,
+        "max": 40,  # hou t klein
     }
-    r = requests.get(
-      f"{base_url()}/v2/shopping/flight-offers",
-      params=params,
-      headers={"Authorization": f"Bearer {tok}"},
-      timeout=45
-    )
-    r.raise_for_status()
+    r = get_with_retries(f"{base_url()}/v2/shopping/flight-offers", params, {"Authorization": f"Bearer {tok}"})
     return r.json().get("data", [])
 
 def eligible(offer):
-    # elk segment: operated door SkyTeam + marketed door FB-eligible carrier
     for itin in offer.get("itineraries", []):
         for s in itin.get("segments", []):
-            mk = s.get("carrierCode")                           # marketing
-            op = (s.get("operating") or {}).get("carrierCode", mk)  # operating
+            mk = s.get("carrierCode")
+            op = (s.get("operating") or {}).get("carrierCode", mk)
             if mk not in FB_MARKETING or op not in SKYTEAM:
                 return False
     return True
 
 def xp_intra_europe(cabin):
-    # eenvoudige maar effectieve EU-regel: J=15, PE=10, Y=5 per segment
     c = (cabin or "ECONOMY").upper()
     if c.startswith("BUS"): return 15
     if c.startswith("PRE"): return 10
@@ -88,54 +89,79 @@ def summarize(offer):
             cab = s.get("cabin","ECONOMY")
             cabins.append(cab)
             xp += xp_intra_europe(cab)
-    cabin = ("Business" if any(c.upper().startswith("BUS") for c in cabins)
-             else "Premium Economy" if any(c.upper().startswith("PRE") for c in cabins)
-             else "Economy")
+    cabin = "Business" if any(c.upper().startswith("BUS") for c in cabins) \
+            else ("Premium Economy" if any(c.upper().startswith("PRE") for c in cabins) else "Economy")
     eur_per_xp = round(price / max(1, xp), 2)
     first = offer["itineraries"][0]["segments"][0]["departure"]["iataCode"]
     last  = offer["itineraries"][0]["segments"][-1]["arrival"]["iataCode"]
     return {
-      "title": f"{first}-{last} ({cabin})",
-      "itinerary": f"{first}-{last}",
-      "cabin": cabin,
-      "segments": segs,
-      "xp_total": xp,
-      "price_eur": round(price,2),
-      "eur_per_xp": eur_per_xp
+        "title": f"{first}-{last} ({cabin})",
+        "itinerary": f"{first}-{last}",
+        "cabin": cabin,
+        "segments": segs,
+        "xp_total": xp,
+        "price_eur": round(price,2),
+        "eur_per_xp": eur_per_xp
     }
 
-# ------ Main --------------------------------------------------------------
 def main():
-    tok   = get_token()
+    start = time.time()
+    tok = get_token()
     today = dt.date.today()
-    hits  = []
+    hits, queries = [], 0
 
-    for origin in ORIGINS:
-        for dest in DESTS:
-            for d in range(1, DAYS_AHEAD+1, 3):   # om de 3 dagen vertrek testen
-                dep = today + dt.timedelta(days=d)
+    # Shuffle voor variatie per run
+    random.seed(int(today.strftime("%Y%m%d")))
+    o_list = ORIGINS[:]; d_list = DESTS[:]
+    random.shuffle(o_list); random.shuffle(d_list)
+
+    for origin in o_list:
+        for dest in d_list:
+            day_offsets = list(range(1, DAYS_AHEAD+1, DAY_STEP))
+            random.shuffle(day_offsets)
+            for d_off in day_offsets:
+                dep = today + dt.timedelta(days=d_off)
                 for stay in STAY_NIGHTS:
+                    if (time.time() - start) > DEADLINE_MIN * 60:
+                        logging.warning("Stoppen op deadline-bescherming.")
+                        break
+                    if queries >= MAX_QUERIES:
+                        logging.warning("MAX_QUERIES bereikt, stoppen.")
+                        break
+
                     ret = dep + dt.timedelta(days=stay)
+                    queries += 1
+                    logging.info(f"[{queries}] Zoek {origin}->{dest} {dep} / terug {ret}")
                     try:
                         offers = search_offers(tok, origin, dest, dep, ret)
-                    except requests.HTTPError:
+                    except Exception as e:
+                        logging.error(f"Zoekfout {origin}-{dest} {dep}/{ret}: {e}")
                         continue
+
                     for off in offers:
-                        if not eligible(off):
+                        if not eligible(off): 
                             continue
                         row = summarize(off)
                         if row["eur_per_xp"] < THRESHOLD:
                             row.update({
-                              "link": "",  # optioneel deeplink; leeg laten kan ook
-                              "travel_dates": f"{dep} to {ret}",
-                              "carrier": "SkyTeam",
-                              "book_code": "",
-                              "notes": "auto-bot",
-                              "pubdate_utc": dt.datetime.utcnow().isoformat(timespec="seconds")+"Z"
+                                "link": "",
+                                "travel_dates": f"{dep} to {ret}",
+                                "carrier": "SkyTeam",
+                                "book_code": "",
+                                "notes": "auto-bot",
+                                "pubdate_utc": dt.datetime.utcnow().isoformat(timespec="seconds")+"Z"
                             })
                             hits.append(row)
+                            if len(hits) >= EARLY_STOP_AT:
+                                logging.info("Early-stop: genoeg geschikte hits gevonden.")
+                                break
+                    if len(hits) >= EARLY_STOP_AT:
+                        break
+                if len(hits) >= EARLY_STOP_AT:
+                    break
+            if len(hits) >= EARLY_STOP_AT:
+                break
 
-    # sorteren en top 10 bewaren
     hits.sort(key=lambda r: (r["eur_per_xp"], -r["xp_total"]))
     top10 = hits[:10]
 
@@ -147,6 +173,8 @@ def main():
             w.writerow([r["title"], r["link"], r["itinerary"], r["cabin"], r["segments"],
                         r["xp_total"], r["price_eur"], r["eur_per_xp"], r["travel_dates"],
                         r["carrier"], r["book_code"], r["notes"], r["pubdate_utc"]])
+
+    logging.info(f"Klaar. Queries: {queries}, hits: {len(hits)}, duur: {int(time.time()-start)}s")
 
 if __name__ == "__main__":
     main()
