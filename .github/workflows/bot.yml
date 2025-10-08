@@ -11,6 +11,8 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 20   # optioneel
+
 
     steps:
       - name: Checkout repo (met push-token, volledige history)
