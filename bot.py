@@ -2,7 +2,7 @@
 import os, csv, requests, datetime as dt
 
 # ------ Instellingen ---------------------------------------------------------
-ORIGINS = ["AMS","RTM","EIN","GRQ","MST","BRU","DUS","CGN","NRN"]
+ORIGINS = ["AMS","DUS"]
 
 # Kansrijke EU-bestemmingen (hubs + goedkope XP-routes); voeg gerust toe
 DESTS = [
@@ -16,7 +16,7 @@ DESTS = [
   "VNO","KUN","PLQ",
 ]
 
-DAYS_AHEAD   = 60                 # zoek 60 dagen vooruit
+DAYS_AHEAD   = 14                 # zoek 60 dagen vooruit
 STAY_NIGHTS  = [1,2,3]            # 1-3 nachten (pas aan naar smaak)
 CURRENCY     = "EUR"
 THRESHOLD    = 10.0               # alleen < €10/XP
