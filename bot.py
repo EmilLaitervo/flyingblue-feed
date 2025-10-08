@@ -1,33 +1,48 @@
 #!/usr/bin/env python3
 import os, csv, time, random, logging, requests, datetime as dt
 
-# ====== Snellere/robuustere settings =========================================
-ORIGINS = ["AMS","BRU","DUS"]               # begin compact; later uitbreiden
-DESTS   = ["CDG","OSL","CPH","ARN","HEL","BCN","LIS","MAD","DUB","VIE","PRG"]
-DAYS_AHEAD   = 45                            # 60 kan, maar 45 is sneller
-DAY_STEP     = 5                             # i.p.v. elke dag → om de 5 dagen
-STAY_NIGHTS  = [2]                           # eenvoudiger raster; later 1/3 erbij
+# ====== Instellingen =========================================================
+# Vergroot origins rustig als dit stabiel draait
+ORIGINS = ["AMS","BRU","DUS","CGN","NRN","RTM","EIN","GRQ","MST"]
+
+# Veel EU-bestemmingen (hubs + goedkope routes). Voeg gerust toe.
+DESTS = [
+  "CDG","ORY","LYS","NCE","MRS",
+  "OSL","TRF","BGO","SVG","CPH","ARN","GOT","HEL","TLL","RIX","VNO",
+  "ATH","SKG","LCA","MLA","IST","SAW","TLV",
+  "BCN","MAD","AGP","PMI","LIS","OPO","FAO",
+  "DUB","BFS","EDI","GLA","BHX","MAN","BRS","NCL","LHR","LGW","LCY",
+  "WAW","KRK","GDN","PRG","BUD","ZAG","SPU","DBV","TIA","SOF","OTP","CLJ","IAS",
+  "VIE","ZRH","GVA","MXP","LIN","FCO","NAP","PSA","FLR","CAG","CTA","RHO","HER","CFU","SKP"
+]
+
+DAYS_AHEAD   = 60         # 60 dagen vooruit
+DAY_STEP     = 3          # dichter raster dan 5
+STAY_NIGHTS  = [0,1,2,3]  # ook same-day/overnight proberen
 CURRENCY     = "EUR"
-THRESHOLD    = 10.0
-USE_TEST_API = False                         # productie!
+THRESHOLD    = 10.0       # strikt < €10/XP
+USE_TEST_API = False      # productie!
 
-# Limieten / anti-hang
-REQUEST_TIMEOUT = 12                         # seconden per API-call
-MAX_RETRIES     = 2                          # retries per call
+# Query-beperkingen (anti-hang)
+REQUEST_TIMEOUT = 12
+MAX_RETRIES     = 2
 BACKOFF_SEC     = 2.5
-MAX_QUERIES     = 120                        # harde cap per run
-EARLY_STOP_AT   = 10                         # stop zodra 10 hits < €10/XP
-DEADLINE_MIN    = 8                          # run hard stoppen < 10 min step
+MAX_QUERIES     = 200      # iets ruimer dan 120
+EARLY_STOP_AT   = 10       # stop zodra 10 hits
+DEADLINE_MIN    = 10       # hard stop na ~10 min compute
 
-# SkyTeam + FB-marketing
+# SkyTeam / FB-marketing
 SKYTEAM      = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
 FB_MARKETING = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
+
+# Cabines: None = “alle”, plus geforceerde cabin-searches
+CABIN_CLASSES = [None, "ECONOMY", "PREMIUM_ECONOMY", "BUSINESS"]
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
 def base_url():
-    return "https://api.amadeus.com" if not USE_TEST_API else "https://test.api.amadeus.com"
+    return "https://api.amadeus.com"
 
 def get_token():
     r = requests.post(
@@ -47,12 +62,12 @@ def get_with_retries(url, params, headers):
             r.raise_for_status()
             return r
         except Exception as e:
-            if i == MAX_RETRIES: raise
-            sleep = BACKOFF_SEC * (i+1)
-            logging.warning(f"API retry {i+1}/{MAX_RETRIES} in {sleep:.1f}s: {e}")
-            time.sleep(sleep)
+            if i == MAX_RETRIES:
+                raise
+            time.sleep(BACKOFF_SEC * (i+1))
+            logging.warning(f"Retry {i+1}/{MAX_RETRIES}: {e}")
 
-def search_offers(tok, origin, dest, dep, ret):
+def search_offers(tok, origin, dest, dep, ret, travel_class=None):
     params = {
         "originLocationCode": origin,
         "destinationLocationCode": dest,
@@ -60,16 +75,19 @@ def search_offers(tok, origin, dest, dep, ret):
         "returnDate": ret.isoformat(),
         "adults": 1,
         "currencyCode": CURRENCY,
-        "max": 40,  # hou t klein
+        "max": 60,                 # iets hoger, maar nog veilig
+        "nonStop": "false"         # expliciet met overstap oké
     }
+    if travel_class:
+        params["travelClass"] = travel_class
     r = get_with_retries(f"{base_url()}/v2/shopping/flight-offers", params, {"Authorization": f"Bearer {tok}"})
     return r.json().get("data", [])
 
 def eligible(offer):
     for itin in offer.get("itineraries", []):
         for s in itin.get("segments", []):
-            mk = s.get("carrierCode")
-            op = (s.get("operating") or {}).get("carrierCode", mk)
+            mk = s.get("carrierCode")                           # marketing
+            op = (s.get("operating") or {}).get("carrierCode", mk)  # operating
             if mk not in FB_MARKETING or op not in SKYTEAM:
                 return False
     return True
@@ -83,8 +101,8 @@ def xp_intra_europe(cabin):
 def summarize(offer):
     price = float(offer["price"]["grandTotal"])
     segs, xp, cabins = 0, 0, []
-    for itin in offer.get("itineraries", []):
-        for s in itin.get("segments", []):
+    for it in offer.get("itineraries", []):
+        for s in it.get("segments", []):
             segs += 1
             cab = s.get("cabin","ECONOMY")
             cabins.append(cab)
@@ -109,9 +127,10 @@ def main():
     tok = get_token()
     today = dt.date.today()
     hits, queries = [], 0
+    total_offers, eligible_offers = 0, 0
 
-    # Shuffle voor variatie per run
-    random.seed(int(today.strftime("%Y%m%d")))
+    # randomize volgorde per run
+    random.seed(int(time.time()))
     o_list = ORIGINS[:]; d_list = DESTS[:]
     random.shuffle(o_list); random.shuffle(d_list)
 
@@ -130,33 +149,38 @@ def main():
                         break
 
                     ret = dep + dt.timedelta(days=stay)
-                    queries += 1
-                    logging.info(f"[{queries}] Zoek {origin}->{dest} {dep} / terug {ret}")
-                    try:
-                        offers = search_offers(tok, origin, dest, dep, ret)
-                    except Exception as e:
-                        logging.error(f"Zoekfout {origin}-{dest} {dep}/{ret}: {e}")
-                        continue
-
-                    for off in offers:
-                        if not eligible(off): 
+                    for tclass in CABIN_CLASSES:
+                        if (time.time() - start) > DEADLINE_MIN * 60 or queries >= MAX_QUERIES:
+                            break
+                        queries += 1
+                        logging.info(f"[{queries}] {origin}->{dest} {dep}/{ret} class={tclass or 'ANY'}")
+                        try:
+                            offers = search_offers(tok, origin, dest, dep, ret, travel_class=tclass)
+                        except Exception as e:
+                            logging.error(f"Zoekfout {origin}-{dest} {dep}/{ret} class={tclass}: {e}")
                             continue
-                        row = summarize(off)
-                        if row["eur_per_xp"] < THRESHOLD:
-                            row.update({
-                                "link": "",
-                                "travel_dates": f"{dep} to {ret}",
-                                "carrier": "SkyTeam",
-                                "book_code": "",
-                                "notes": "auto-bot",
-                                "pubdate_utc": dt.datetime.utcnow().isoformat(timespec="seconds")+"Z"
-                            })
-                            hits.append(row)
-                            if len(hits) >= EARLY_STOP_AT:
-                                logging.info("Early-stop: genoeg geschikte hits gevonden.")
-                                break
-                    if len(hits) >= EARLY_STOP_AT:
-                        break
+
+                        total_offers += len(offers)
+                        for off in offers:
+                            if not eligible(off):
+                                continue
+                            eligible_offers += 1
+                            row = summarize(off)
+                            if row["eur_per_xp"] < THRESHOLD:
+                                row.update({
+                                    "link": "",
+                                    "travel_dates": f"{dep} to {ret}",
+                                    "carrier": "SkyTeam",
+                                    "book_code": "",
+                                    "notes": "auto-bot",
+                                    "pubdate_utc": dt.datetime.utcnow().isoformat(timespec="seconds")+"Z"
+                                })
+                                hits.append(row)
+                                if len(hits) >= EARLY_STOP_AT:
+                                    logging.info("Early-stop: genoeg geschikte hits.")
+                                    break
+                        if len(hits) >= EARLY_STOP_AT:
+                            break
                 if len(hits) >= EARLY_STOP_AT:
                     break
             if len(hits) >= EARLY_STOP_AT:
@@ -174,7 +198,7 @@ def main():
                         r["xp_total"], r["price_eur"], r["eur_per_xp"], r["travel_dates"],
                         r["carrier"], r["book_code"], r["notes"], r["pubdate_utc"]])
 
-    logging.info(f"Klaar. Queries: {queries}, hits: {len(hits)}, duur: {int(time.time()-start)}s")
+    logging.info(f"Klaar. Queries: {queries}, total_offers: {total_offers}, eligible_offers: {eligible_offers}, hits: {len(hits)}, duur: {int(time.time()-start)}s")
 
 if __name__ == "__main__":
     main()
