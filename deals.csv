@@ -1,11 +1,1 @@
-title,link,itinerary,cabin,segments,xp_total,price_eur,eur_per_xp,travel_dates,carrier,book_code,notes,pubdate_utc
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-03,SkyTeam,,legfinder,2025-10-15T20:21:04Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-03,SkyTeam,,legfinder,2025-10-15T20:21:04Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-04,SkyTeam,,legfinder,2025-10-15T20:21:13Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-05,SkyTeam,,legfinder,2025-10-15T20:21:22Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-06,SkyTeam,,legfinder,2025-10-15T20:21:29Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-06,SkyTeam,,legfinder,2025-10-15T20:21:29Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-07,SkyTeam,,legfinder,2025-10-15T20:21:38Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-07,SkyTeam,,legfinder,2025-10-15T20:21:38Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-07,SkyTeam,,legfinder,2025-10-15T20:21:38Z
-DUS-HEL (Economy),,DUS-HEL,Economy,4,20,230.75,11.54,2025-11-25 to 2025-12-07,SkyTeam,,legfinder,2025-10-15T20:21:38Z
+title,itinerary,cabin,segments,xp_total,price_eur,eur_per_xp,travel_dates,carrier,notes,pubdate_utc
