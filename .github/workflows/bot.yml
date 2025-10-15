@@ -35,11 +35,11 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run bot (schrijft deals.csv)
-        env:
-          AMADEUS_API_KEY: ${{ secrets.AMADEUS_API_KEY }}
-          AMADEUS_API_SECRET: ${{ secrets.AMADEUS_API_SECRET }}
-        run: python3 bot.py
+      - name: Run leg-finder
+      env:
+      AMADEUS_API_KEY: ${{ secrets.AMADEUS_API_KEY }}
+      AMADEUS_API_SECRET: ${{ secrets.AMADEUS_API_SECRET }}
+      run: python3 bot_legfinder.py
 
       - name: Rebuild feed.xml
         run: python3 generate_feed.py
