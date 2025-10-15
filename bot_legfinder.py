@@ -1,57 +1,70 @@
 #!/usr/bin/env python3
-# Leg Finder — windowed search for best EUR/XP on specific routes & dates
+# Flying Blue XP Leg Finder – gericht zoeken naar optimale €/XP
 import os, csv, time, logging, requests, datetime as dt
 from itertools import product
 
-# ====== Config: pas alleen dit blok aan ======================================
-ORIGINS = ["AMS","DUS"]          # jouw vertrekhavens
-DESTS   = ["HEL","TKU"]          # jouw bestemmingen (Helsinki / Turku)
+# =========================
+# CONFIGURATIE
+# =========================
 
-OUT_DATE_TARGET = "2025-11-27"   # gewenste heendatum
-OUT_WINDOW_DAYS = 2              # venster ±dagen om OUT_DATE_TARGET
-RET_DATE_TARGET = "2025-12-05"   # gewenste retourdatum
-RET_WINDOW_DAYS = 2              # venster ±dagen om RET_DATE_TARGET
+# 🔹 Vertrekluchthavens
+ORIGINS = ["AMS", "DUS"]
 
-CURRENCY   = "EUR"
-THRESHOLD  = 12.0                # laat alles < €12/XP door (pas later terug naar 10)
-MIN_SEGMENTS = 2                 # minimaal 2 (heen+terug); zet 4 als je J-runs wil snipen
-CABIN_CLASSES = ["BUSINESS","PREMIUM_ECONOMY","ECONOMY"]  # zoek in alle cabines
+# 🔹 Bestemmingen
+DESTS = ["HEL", "TKU"]
 
-REQUEST_TIMEOUT = 12
-MAX_RETRIES     = 2
-BACKOFF_SEC     = 2.5
-EARLY_STOP_AT   = 10             # genoeg resultaten? dan stoppen
+# 🔹 Heenreis: 26–28 november 2025
+OUT_DATE_TARGET = "2025-11-27"
+OUT_WINDOW_DAYS = 1  # ±1 dag → 26–28
 
-# SkyTeam / Flying Blue
-SKYTEAM      = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
-FB_MARKETING = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
+# 🔹 Terugreis: 5–6 december 2025
+RET_DATE_TARGET = "2025-12-05"
+RET_WINDOW_DAYS = 0.5  # ±0.5 dag → 5–6
 
-USE_TEST_API = False  # productie
-# ============================================================================
+# 🔹 Alleen tonen wat ≤ €11 per XP is
+THRESHOLD = 11.0
 
+# 🔹 XP-berekening voor intra-EU: Y=5 / PE=10 / J=15
+MIN_SEGMENTS = 2
+CABIN_CLASSES = ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"]
+
+# 🔹 Productieomgeving
+USE_TEST_API = False
+
+# 🔹 Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-def base_url(): return "https://api.amadeus.com" if not USE_TEST_API else "https://test.api.amadeus.com"
+# =========================
+# HULPFUNCTIES
+# =========================
+
+def base_url():
+    return "https://api.amadeus.com" if not USE_TEST_API else "https://test.api.amadeus.com"
 
 def get_token():
     r = requests.post(
         f"{base_url()}/v1/security/oauth2/token",
-        data={"grant_type":"client_credentials",
-              "client_id":os.getenv("AMADEUS_API_KEY"),
-              "client_secret":os.getenv("AMADEUS_API_SECRET")},
-        timeout=REQUEST_TIMEOUT
-    ); r.raise_for_status()
+        data={
+            "grant_type": "client_credentials",
+            "client_id": os.getenv("AMADEUS_API_KEY"),
+            "client_secret": os.getenv("AMADEUS_API_SECRET"),
+        },
+        timeout=15,
+    )
+    r.raise_for_status()
     return r.json()["access_token"]
 
-def get_with_retries(url, params, headers):
-    for i in range(MAX_RETRIES+1):
+def get_with_retry(url, params, headers, retries=2):
+    for i in range(retries + 1):
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
-            r.raise_for_status(); return r
+            r = requests.get(url, params=params, headers=headers, timeout=15)
+            r.raise_for_status()
+            return r
         except Exception as e:
-            if i == MAX_RETRIES: raise
-            time.sleep(BACKOFF_SEC*(i+1))
-            logging.warning(f"Retry {i+1}/{MAX_RETRIES}: {e}")
+            if i == retries:
+                raise
+            time.sleep(2.5 * (i + 1))
+            logging.warning(f"Retry {i+1}/{retries}: {e}")
 
 def search_offers(tok, origin, dest, dep, ret, tclass=None):
     p = {
@@ -60,16 +73,21 @@ def search_offers(tok, origin, dest, dep, ret, tclass=None):
         "departureDate": dep.isoformat(),
         "returnDate": ret.isoformat(),
         "adults": 1,
-        "currencyCode": CURRENCY,
+        "currencyCode": "EUR",
         "max": 60,
         "nonStop": "false",
     }
-    if tclass: p["travelClass"] = tclass
-    r = get_with_retries(f"{base_url()}/v2/shopping/flight-offers", p, {"Authorization": f"Bearer {tok}"})
+    if tclass:
+        p["travelClass"] = tclass
+    r = get_with_retry(f"{base_url()}/v2/shopping/flight-offers", p, {"Authorization": f"Bearer {tok}"})
     return r.json().get("data", [])
 
-def eligible(off):
-    for it in off.get("itineraries", []):
+# SkyTeam + Flying Blue partners
+SKYTEAM = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
+FB_MARKETING = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
+
+def eligible(offer):
+    for it in offer.get("itineraries", []):
         for s in it.get("segments", []):
             mk = s.get("carrierCode")
             op = (s.get("operating") or {}).get("carrierCode", mk)
@@ -83,25 +101,41 @@ def xp_intra_eu(cabin):
     if c.startswith("PRE"): return 10
     return 5
 
-def summarize(off):
-    price = float(off["price"]["grandTotal"])
+def summarize(offer):
+    price = float(offer["price"]["grandTotal"])
     segs, xp, cabins = 0, 0, []
-    for it in off.get("itineraries", []):
+    for it in offer.get("itineraries", []):
         segs += len(it.get("segments", []))
         for s in it.get("segments", []):
-            cabins.append(s.get("cabin","ECONOMY"))
+            cabins.append(s.get("cabin", "ECONOMY"))
             xp += xp_intra_eu(s.get("cabin"))
-    if segs < MIN_SEGMENTS: return None
-    cabin = "Business" if any(c.upper().startswith("BUS") for c in cabins) else ("Premium Economy" if any(c.upper().startswith("PRE") for c in cabins) else "Economy")
+    if segs < MIN_SEGMENTS:
+        return None
+    cabin = "Business" if any(c.upper().startswith("BUS") for c in cabins) else (
+        "Premium Economy" if any(c.upper().startswith("PRE") for c in cabins) else "Economy"
+    )
     eurxp = round(price / max(1, xp), 2)
-    first = off["itineraries"][0]["segments"][0]["departure"]["iataCode"]
-    last  = off["itineraries"][0]["segments"][-1]["arrival"]["iataCode"]
-    return {"title":f"{first}-{last} ({cabin})","itinerary":f"{first}-{last}","cabin":cabin,
-            "segments":segs,"xp_total":xp,"price_eur":round(price,2),"eur_per_xp":eurxp}
+    first = offer["itineraries"][0]["segments"][0]["departure"]["iataCode"]
+    last = offer["itineraries"][0]["segments"][-1]["arrival"]["iataCode"]
+    return {
+        "title": f"{first}-{last} ({cabin})",
+        "itinerary": f"{first}-{last}",
+        "cabin": cabin,
+        "segments": segs,
+        "xp_total": xp,
+        "price_eur": round(price, 2),
+        "eur_per_xp": eurxp,
+    }
 
 def date_range(center_str, window):
     c = dt.date.fromisoformat(center_str)
-    return [c + dt.timedelta(days=d) for d in range(-window, window+1)]
+    low = int(c.toordinal() - round(window))
+    high = int(c.toordinal() + round(window))
+    return [dt.date.fromordinal(d) for d in range(low, high + 1)]
+
+# =========================
+# MAIN
+# =========================
 
 def main():
     tok = get_token()
@@ -114,49 +148,45 @@ def main():
     for origin, dest in product(ORIGINS, DESTS):
         for dep in out_dates:
             for ret in ret_dates:
-                if ret <= dep: continue  # retour na heen
+                if ret <= dep:
+                    continue
                 for tclass in CABIN_CLASSES:
                     queries += 1
                     logging.info(f"[{queries}] {origin}->{dest} {dep}/{ret} class={tclass}")
                     try:
                         offers = search_offers(tok, origin, dest, dep, ret, tclass)
                     except Exception as e:
-                        logging.error(f"Zoekfout {origin}-{dest} {dep}/{ret} class={tclass}: {e}")
+                        logging.error(f"Zoekfout {origin}-{dest} {dep}/{ret}: {e}")
                         continue
                     for off in offers:
-                        if not eligible(off): continue
+                        if not eligible(off):
+                            continue
                         row = summarize(off)
-                        if not row: continue
-                        if row["eur_per_xp"] < THRESHOLD:
+                        if not row:
+                            continue
+                        if row["eur_per_xp"] <= THRESHOLD:
                             row.update({
-                                "link": "",
                                 "travel_dates": f"{dep} to {ret}",
                                 "carrier": "SkyTeam",
-                                "book_code": "",
                                 "notes": "legfinder",
                                 "pubdate_utc": dt.datetime.utcnow().isoformat(timespec="seconds")+"Z"
                             })
                             results.append(row)
-                            if len(results) >= EARLY_STOP_AT:
-                                logging.info("Early stop: genoeg resultaten.")
-                                break
-                if len(results) >= EARLY_STOP_AT: break
-            if len(results) >= EARLY_STOP_AT: break
 
     results.sort(key=lambda r: (r["eur_per_xp"], -r["xp_total"]))
-    top10 = results[:10]
+    top = results  # geen limiet
 
-    # schrijf CSV voor jou + feed gebruikt nog steeds deals.csv
-    with open("deals.csv","w",newline="",encoding="utf-8") as f:
+    with open("deals.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["title","link","itinerary","cabin","segments","xp_total","price_eur",
-                    "eur_per_xp","travel_dates","carrier","book_code","notes","pubdate_utc"])
-        for r in top10:
-            w.writerow([r["title"], r["link"], r["itinerary"], r["cabin"], r["segments"],
-                        r["xp_total"], r["price_eur"], r["eur_per_xp"], r["travel_dates"],
-                        r["carrier"], r["book_code"], r["notes"], r["pubdate_utc"]])
+        w.writerow(["title","itinerary","cabin","segments","xp_total","price_eur",
+                    "eur_per_xp","travel_dates","carrier","notes","pubdate_utc"])
+        for r in top:
+            w.writerow([
+                r["title"], r["itinerary"], r["cabin"], r["segments"], r["xp_total"],
+                r["price_eur"], r["eur_per_xp"], r["travel_dates"], r["carrier"], r["notes"], r["pubdate_utc"]
+            ])
 
-    logging.info(f"Klaar. Queried combos: {queries}, hits: {len(results)}")
+    logging.info(f"Klaar. Queries: {queries}, hits: {len(results)}")
 
 if __name__ == "__main__":
     main()
