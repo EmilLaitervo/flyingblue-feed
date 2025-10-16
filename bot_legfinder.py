@@ -23,7 +23,7 @@ RET_DATE_TARGET = "2025-12-05"
 RET_WINDOW_DAYS = 0.5  # ±0.5 dag → 5–6
 
 # 🔹 Cabines en XP-berekening
-CABIN_CLASSES = ["BUSINESS"]
+CABIN_CLASSES = ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"]
 MIN_SEGMENTS = 2  # minimaal heen en terug
 USE_TEST_API = False  # productieomgeving
 
