@@ -23,7 +23,7 @@ RET_DATE_TARGET = "2025-12-05"
 RET_WINDOW_DAYS = 0.5  # ±0.5 dag → 5–6
 
 # 🔹 Cabines en XP-berekening
-CABIN_CLASSES = ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"]
+CABIN_CLASSES = ["BUSINESS"]
 MIN_SEGMENTS = 2  # minimaal heen en terug
 USE_TEST_API = False  # productieomgeving
 
@@ -70,7 +70,7 @@ def search_offers(tok, origin, dest, dep, ret, tclass=None):
         "returnDate": ret.isoformat(),
         "adults": 1,
         "currencyCode": "EUR",
-        "max": 60,
+        "max": 100,
         "nonStop": "false",
     }
     if tclass:
