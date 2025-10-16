@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Flying Blue XP Leg Finder – gericht zoeken naar optimale €/XP
+# Flying Blue XP Finder – zoekt ALLE vluchten tussen opgegeven luchthavens
+# Sorteert op €/XP (laag → hoog), zonder filters
 import os, csv, time, logging, requests, datetime as dt
 from itertools import product
 
@@ -13,23 +14,18 @@ ORIGINS = ["AMS", "DUS"]
 # 🔹 Bestemmingen
 DESTS = ["HEL", "TKU"]
 
-# 🔹 Heenreis: 26–28 november 2025
-OUT_DATE_TARGET = "2025-11-27"
-OUT_WINDOW_DAYS = 1  # ±1 dag → 26–28
+# 🔹 Heenreis: 25–28 november 2025
+OUT_DATE_TARGET = "2025-11-26"
+OUT_WINDOW_DAYS = 1.5  # ±1.5 dag → 25–28
 
 # 🔹 Terugreis: 5–6 december 2025
 RET_DATE_TARGET = "2025-12-05"
 RET_WINDOW_DAYS = 0.5  # ±0.5 dag → 5–6
 
-# 🔹 Alleen tonen wat ≤ €11 per XP is
-THRESHOLD = 11.0
-
-# 🔹 XP-berekening voor intra-EU: Y=5 / PE=10 / J=15
-MIN_SEGMENTS = 2
+# 🔹 Cabines en XP-berekening
 CABIN_CLASSES = ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"]
-
-# 🔹 Productieomgeving
-USE_TEST_API = False
+MIN_SEGMENTS = 2  # minimaal heen en terug
+USE_TEST_API = False  # productieomgeving
 
 # 🔹 Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -82,11 +78,12 @@ def search_offers(tok, origin, dest, dep, ret, tclass=None):
     r = get_with_retry(f"{base_url()}/v2/shopping/flight-offers", p, {"Authorization": f"Bearer {tok}"})
     return r.json().get("data", [])
 
-# SkyTeam + Flying Blue partners
+# Flying Blue partners
 SKYTEAM = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
 FB_MARKETING = {"KL","AF","DL","AZ","KE","AM","CI","MU","RO","SV","KQ","GA","ME"}
 
 def eligible(offer):
+    """Checkt of alle segmenten SkyTeam-operated én Flying Blue-marketed zijn"""
     for it in offer.get("itineraries", []):
         for s in it.get("segments", []):
             mk = s.get("carrierCode")
@@ -96,6 +93,7 @@ def eligible(offer):
     return True
 
 def xp_intra_eu(cabin):
+    """XP-berekening per segment voor intra-EU"""
     c = (cabin or "ECONOMY").upper()
     if c.startswith("BUS"): return 15
     if c.startswith("PRE"): return 10
@@ -111,8 +109,10 @@ def summarize(offer):
             xp += xp_intra_eu(s.get("cabin"))
     if segs < MIN_SEGMENTS:
         return None
-    cabin = "Business" if any(c.upper().startswith("BUS") for c in cabins) else (
-        "Premium Economy" if any(c.upper().startswith("PRE") for c in cabins) else "Economy"
+    cabin = (
+        "Business" if any(c.upper().startswith("BUS") for c in cabins)
+        else "Premium Economy" if any(c.upper().startswith("PRE") for c in cabins)
+        else "Economy"
     )
     eurxp = round(price / max(1, xp), 2)
     first = offer["itineraries"][0]["segments"][0]["departure"]["iataCode"]
@@ -162,31 +162,32 @@ def main():
                         if not eligible(off):
                             continue
                         row = summarize(off)
-                        if not row:
-                            continue
-                        if row["eur_per_xp"] <= THRESHOLD:
+                        if row:
                             row.update({
                                 "travel_dates": f"{dep} to {ret}",
                                 "carrier": "SkyTeam",
-                                "notes": "legfinder",
+                                "notes": "unfiltered",
                                 "pubdate_utc": dt.datetime.utcnow().isoformat(timespec="seconds")+"Z"
                             })
                             results.append(row)
 
+    # sorteer alle resultaten op €/XP (laag → hoog)
     results.sort(key=lambda r: (r["eur_per_xp"], -r["xp_total"]))
-    top = results  # geen limiet
 
     with open("deals.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["title","itinerary","cabin","segments","xp_total","price_eur",
-                    "eur_per_xp","travel_dates","carrier","notes","pubdate_utc"])
-        for r in top:
+        w.writerow([
+            "title","itinerary","cabin","segments","xp_total","price_eur",
+            "eur_per_xp","travel_dates","carrier","notes","pubdate_utc"
+        ])
+        for r in results:
             w.writerow([
                 r["title"], r["itinerary"], r["cabin"], r["segments"], r["xp_total"],
-                r["price_eur"], r["eur_per_xp"], r["travel_dates"], r["carrier"], r["notes"], r["pubdate_utc"]
+                r["price_eur"], r["eur_per_xp"], r["travel_dates"], r["carrier"],
+                r["notes"], r["pubdate_utc"]
             ])
 
-    logging.info(f"Klaar. Queries: {queries}, hits: {len(results)}")
+    logging.info(f"Klaar. Queries: {queries}, resultaten: {len(results)}")
 
 if __name__ == "__main__":
     main()
